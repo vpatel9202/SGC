@@ -249,9 +249,11 @@ def save_groups_to_file(account, groups):
 
 
 def main():
+    LOGGER.info("Starting main execution...")
+
     setup_logger()
     on_first_run()
-    LOGGER.info("Starting main execution...")
+
     config = read_config(SETTINGS_FILE)
     ensure_refresh_token('Account1', config)
     ensure_refresh_token('Account2', config)
