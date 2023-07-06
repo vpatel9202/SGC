@@ -178,13 +178,14 @@ def get_all_contacts(account, config):
 
     resource_names = []
     page_token = None
+    personFields = 'addresses,ageRanges,biographies,birthdays,braggingRights,coverPhotos,emailAddresses,events,genders,imClients,interests,locales,memberships,metadata,names,nicknames,occupations,organizations,phoneNumbers,photos,relations,relationshipInterests,relationshipStatuses,residences,sipAddresses,skills,taglines,urls,userDefined'
 
     while True:
         results = people_service.people().connections().list(
             resourceName='people/me',
             pageSize=2000,
             pageToken=page_token,
-            personFields='names,emailAddresses').execute()
+            personFields=personFields).execute()
 
         connections = results.get('connections', [])
         resource_names.extend([c['resourceName'] for c in connections])
@@ -201,11 +202,22 @@ def get_all_contacts(account, config):
     for chunk in chunked_resource_names:
         batch_get_results = people_service.people().getBatchGet(
             resourceNames=chunk,
-            personFields='names,emailAddresses,phoneNumbers,addresses'
+            personFields=personFields
         ).execute()
         contacts.extend([person['person'] for person in batch_get_results.get('responses', []) if 'person' in person])
 
     return contacts
+
+
+def get_group_list(account, config):
+    """Gets all contact group data for a particular account."""
+    creds = get_credentials(account, config)
+    people_service = get_people_service(creds)
+
+    # Get all contact groups
+    groups = people_service.contactGroups().list().execute().get('contactGroups', [])
+
+    return groups
 
 
 def save_contacts_to_file(account, contacts):
@@ -215,8 +227,25 @@ def save_contacts_to_file(account, contacts):
         LOGGER.warning(f"Specified directory '{DATA_DIR}' does not exist so it will be created automatically.")
         os.mkdir(DATA_DIR)
 
-    with open(os.path.join(DATA_DIR, f"{account}_contacts.json"), 'w') as f:
+    file_name_base = f"{date.today():%Y-%m-%d}.{account}_contacts"
+    json_file_path = os.path.join(DATA_DIR, f"{file_name_base}.json")
+
+    with open(json_file_path, 'w') as f:
         json.dump(contacts, f)
+
+
+def save_groups_to_file(account, groups):
+    """Save the contact groups to a JSON file."""
+
+    if not os.path.isdir(DATA_DIR):
+        LOGGER.warning(f"Specified directory '{DATA_DIR}' does not exist so it will be created automatically.")
+        os.mkdir(DATA_DIR)
+
+    file_name_base = f"{date.today():%Y-%m-%d}.{account}_grouplist"
+    json_file_path = os.path.join(DATA_DIR, f"{file_name_base}.json")
+
+    with open(json_file_path, 'w') as f:
+        json.dump(groups, f)
 
 
 def main():
@@ -231,6 +260,9 @@ def main():
     for account in ['Account1', 'Account2']:
         contacts = get_all_contacts(account, config)
         save_contacts_to_file(account, contacts)
+
+        groups = get_group_list(account, config)
+        save_groups_to_file(account, groups)
 
     LOGGER.info("Main execution finished successfully")
 
