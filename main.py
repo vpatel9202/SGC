@@ -10,16 +10,21 @@ and to sync the contacts between the two accounts.
 
 import os
 import configparser
+import json
 import logging
 import shutil
 import sys
 from logging.handlers import TimedRotatingFileHandler
 from datetime import date
 from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
 
 # Constants
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 SETTINGS_FILE = os.path.join(ROOT_DIR, "settings.conf")
+DATA_DIR = os.path.join(ROOT_DIR, "data")
 SCOPES = ['https://www.googleapis.com/auth/contacts']
 LOG_DIR = os.path.join(ROOT_DIR, "logs")
 LOG_LEVEL = 'DEBUG'
@@ -121,11 +126,13 @@ def refresh_token_exists(account, config):
         LOGGER.warning(f"Refresh token for {account} does not exist.")
     return exists
 
+
 def ensure_refresh_token(account, config):
     """Ensure a refresh token exists for a particular account, generating one if necessary."""
     LOGGER.info(f"Ensuring refresh token for {account}")
     if not refresh_token_exists(account, config):
         generate_and_save_refresh_token(account, config)
+
 
 def generate_and_save_refresh_token(account, config):
     """Generate a new refresh token and save it to the settings file."""
@@ -137,6 +144,81 @@ def generate_and_save_refresh_token(account, config):
     write_credentials(SETTINGS_FILE, config)
 
 
+def get_credentials(account, config):
+    """Get valid credentials for the account."""
+    creds = None
+    client_id = config.get(account, 'client_id')
+    client_secret = config.get(account, 'client_secret')
+    refresh_token = config.get(account, 'refresh_token')
+
+    creds = Credentials.from_authorized_user_info(
+        {"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token},
+        SCOPES
+    )
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            LOGGER.info(f"Refreshing expired credentials for {account}...")
+            creds.refresh(Request())
+        else:
+            LOGGER.error(f"Unable to get valid credentials for {account}. Please check your settings.")
+            sys.exit(1)
+    return creds
+
+
+def get_people_service(creds):
+    """Get a service that communicates to a Google API."""
+    return build('people', 'v1', credentials=creds)
+
+
+def get_all_contacts(account, config):
+    """Gets all contact data for a particular account."""
+    creds = get_credentials(account, config)
+    people_service = get_people_service(creds)
+
+    resource_names = []
+    page_token = None
+
+    while True:
+        results = people_service.people().connections().list(
+            resourceName='people/me',
+            pageSize=2000,
+            pageToken=page_token,
+            personFields='names,emailAddresses').execute()
+
+        connections = results.get('connections', [])
+        resource_names.extend([c['resourceName'] for c in connections])
+
+        page_token = results.get('nextPageToken')
+        if not page_token:
+            break
+
+    contacts = []
+    # Split resource names into chunks of 200
+    chunked_resource_names = [resource_names[i:i + 200] for i in range(0, len(resource_names), 200)]
+
+    # Batch get to obtain detailed information for each contact
+    for chunk in chunked_resource_names:
+        batch_get_results = people_service.people().getBatchGet(
+            resourceNames=chunk,
+            personFields='names,emailAddresses,phoneNumbers,addresses'
+        ).execute()
+        contacts.extend([person['person'] for person in batch_get_results.get('responses', []) if 'person' in person])
+
+    return contacts
+
+
+def save_contacts_to_file(account, contacts):
+    """Save the contacts to a JSON file."""
+
+    if not os.path.isdir(DATA_DIR):
+        LOGGER.warning(f"Specified directory '{DATA_DIR}' does not exist so it will be created automatically.")
+        os.mkdir(DATA_DIR)
+
+    with open(os.path.join(DATA_DIR, f"{account}_contacts.json"), 'w') as f:
+        json.dump(contacts, f)
+
+
 def main():
     setup_logger()
     on_first_run()
@@ -144,6 +226,12 @@ def main():
     config = read_config(SETTINGS_FILE)
     ensure_refresh_token('Account1', config)
     ensure_refresh_token('Account2', config)
+
+    # Fetch and save contacts
+    for account in ['Account1', 'Account2']:
+        contacts = get_all_contacts(account, config)
+        save_contacts_to_file(account, contacts)
+
     LOGGER.info("Main execution finished successfully")
 
 

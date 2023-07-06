@@ -125,3 +125,5 @@ dmypy.json
 
 # Settings/credentials file
 settings.conf
+
+data/
