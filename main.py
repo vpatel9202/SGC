@@ -173,11 +173,13 @@ def get_people_service(creds):
 
 def get_all_contacts(account, config):
     """Gets all contact data for a particular account."""
+
     creds = get_credentials(account, config)
     people_service = get_people_service(creds)
 
     resource_names = []
     page_token = None
+    sync_token = config[account]['contactsSyncToken'] or None
     personFields = 'addresses,ageRanges,biographies,birthdays,braggingRights,coverPhotos,emailAddresses,events,genders,imClients,interests,locales,memberships,metadata,names,nicknames,occupations,organizations,phoneNumbers,photos,relations,relationshipInterests,relationshipStatuses,residences,sipAddresses,skills,taglines,urls,userDefined'
 
     while True:
@@ -185,7 +187,17 @@ def get_all_contacts(account, config):
             resourceName='people/me',
             pageSize=2000,
             pageToken=page_token,
-            personFields=personFields).execute()
+            personFields=personFields,
+            requestSyncToken=True,
+            sortOrder='LAST_MODIFIED_DESCENDING',
+            sources=['READ_SOURCE_TYPE_CONTACT'],
+            syncToken=sync_token,
+            prettyPrint=True).execute()
+
+        save_to_file('raw_contacts', account, results)  # Save raw JSON response
+        config[account]['contactsSyncToken'] = results.get('nextSyncToken')
+        LOGGER.info(f"Obtained nextSyncToken: {config[account]['contactsSyncToken']}, saving to config.")
+        write_credentials(SETTINGS_FILE, config)
 
         connections = results.get('connections', [])
         resource_names.extend([c['resourceName'] for c in connections])
@@ -195,10 +207,8 @@ def get_all_contacts(account, config):
             break
 
     contacts = []
-    # Split resource names into chunks of 200
     chunked_resource_names = [resource_names[i:i + 200] for i in range(0, len(resource_names), 200)]
 
-    # Batch get to obtain detailed information for each contact
     for chunk in chunked_resource_names:
         batch_get_results = people_service.people().getBatchGet(
             resourceNames=chunk,
@@ -214,38 +224,40 @@ def get_group_list(account, config):
     creds = get_credentials(account, config)
     people_service = get_people_service(creds)
 
+    page_token = None
+    sync_token = config[account]['groupSyncToken'] or None
+    groupFields = 'clientData,groupType,memberCount,metadata,name'
+
     # Get all contact groups
-    groups = people_service.contactGroups().list().execute().get('contactGroups', [])
+    results = people_service.contactGroups().list(
+        pageSize=1000,
+        pageToken=page_token,
+        groupFields=groupFields,
+        syncToken=sync_token,
+        prettyPrint=True).execute()
+
+    save_to_file('raw_groups', account, results)  # Save raw JSON response
+    config[account]['groupSyncToken'] = results.get('nextSyncToken')
+    LOGGER.info(f"Obtained nextSyncToken: {config[account]['groupSyncToken']}, saving to config.")
+    write_credentials(SETTINGS_FILE, config)
+
+    groups = results.get('contactGroups', [])
 
     return groups
 
 
-def save_contacts_to_file(account, contacts):
-    """Save the contacts to a JSON file."""
+def save_to_file(data_type, account, data):
+    """Save the data to a JSON file."""
 
     if not os.path.isdir(DATA_DIR):
         LOGGER.warning(f"Specified directory '{DATA_DIR}' does not exist so it will be created automatically.")
         os.mkdir(DATA_DIR)
 
-    file_name_base = f"{date.today():%Y-%m-%d}.{account}_contacts"
+    file_name_base = f"{date.today():%Y-%m-%d}.{account}_{data_type}"
     json_file_path = os.path.join(DATA_DIR, f"{file_name_base}.json")
 
     with open(json_file_path, 'w') as f:
-        json.dump(contacts, f)
-
-
-def save_groups_to_file(account, groups):
-    """Save the contact groups to a JSON file."""
-
-    if not os.path.isdir(DATA_DIR):
-        LOGGER.warning(f"Specified directory '{DATA_DIR}' does not exist so it will be created automatically.")
-        os.mkdir(DATA_DIR)
-
-    file_name_base = f"{date.today():%Y-%m-%d}.{account}_grouplist"
-    json_file_path = os.path.join(DATA_DIR, f"{file_name_base}.json")
-
-    with open(json_file_path, 'w') as f:
-        json.dump(groups, f)
+        json.dump(data, f)
 
 
 def main():
@@ -261,10 +273,10 @@ def main():
     # Fetch and save contacts
     for account in ['Account1', 'Account2']:
         contacts = get_all_contacts(account, config)
-        save_contacts_to_file(account, contacts)
+        save_to_file('contacts', account, contacts)
 
         groups = get_group_list(account, config)
-        save_groups_to_file(account, groups)
+        save_to_file('groups', account, groups)
 
     LOGGER.info("Main execution finished successfully")
 

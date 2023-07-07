@@ -1,7 +1,11 @@
 [Account1]
 client_id =
 client_secret =
+contactssynctoken =
+groupsynctoken =
 
 [Account2]
 client_id =
 client_secret =
+contactssynctoken =
+groupsynctoken =
